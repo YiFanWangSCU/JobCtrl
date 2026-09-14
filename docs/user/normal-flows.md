@@ -145,10 +145,12 @@ concurrency, optional source selection, and dry-run mode, then start the run.
 The source picker accepts up to 50 sources; leave it on **All runnable sources**
 to use the complete enabled registry.
 
-Before launch, keep Chrome running with the paired JobCtrl extension connected
-in the profile you want Discovery to use. Pipelines shows that live readiness
-and disables Discover while it is offline. The run uses that profile directly;
-it does not use a profile copy or a silent direct-network/Playwright fallback.
+Discovery can start while the extension is offline. Pipelines shows its status
+without disabling launch. To prefer your current signed-in Chrome profile,
+keep the selected paired extension connected. Each acquisition setup chooses
+the connected extension or guarded public HTTP/anonymous Playwright before
+fetching. Neither mode copies a profile, and a site or access failure does not
+switch transport. Worker readiness and stage eligibility still gate launch.
 
 </WorkflowSurfacePanel>
 
@@ -160,8 +162,10 @@ Start the same Discover workflow from the terminal:
 jobctrl run discover
 ```
 
-The CLI reaches the same fail-closed extension prerequisite even though it does
-not have the Pipelines button preflight.
+The CLI uses the same optional transport selection. An offline extension does
+not prevent dispatch; public-source restrictions and worker readiness still
+apply. See [Crawl Politeness](discovery.md#crawl-politeness) for source-specific
+limits, including anonymous broad-board proxy restrictions.
 
 Per-stage commands (`jobctrl enrich`, `score`, `tailor`, `cover`) and the
 single-job path (`jobctrl job <url> --dry-run`) start the same underlying
@@ -647,7 +651,7 @@ contacts:
 - Research **proposes** candidates for review — it never stores them automatically
   (supervised, INV-4). Each proposed candidate shows its provenance (the page it
   came from, the capture method, and a confidence), and the run shows the
-  per-source outcomes (fetched, blocked by `robots.txt`, rate-limited, or routed
+  per-source outcomes (fetched, rate-limited, historically blocked by `robots.txt`, or routed
   to manual capture because the page needs a login).
 - Review each candidate and click **confirm contact** to promote it into your
   contacts. Only then does it become a stored fact — with its research provenance

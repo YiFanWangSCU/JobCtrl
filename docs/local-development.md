@@ -80,8 +80,9 @@ corepack pnpm dev
 ```
 
 `corepack pnpm dev` is the source-development counterpart of installed
-`jobctrl start`. It starts the full local fleet in dependency order: Temporal dev server,
-TypeScript API, Vite web app, and the Python worker. Before each
+`jobctrl start`. It first builds the browser extension, then starts the full
+local fleet in dependency order: Temporal dev server, TypeScript API, Vite web
+app, and the Python worker. Before each
 component starts, the launcher stops the existing tracked JobCtrl process
 tree for that component, so rerunning `corepack pnpm dev` starts from a clean owned
 stack. It runs in the foreground so supervised terminals keep the child
@@ -102,6 +103,14 @@ both under `JOBCTRL_DIR` lets an interrupted workflow reconnect to the same
 history when the source stack is restarted from another Git worktree. To run a
 fully isolated stack, give it a separate `JOBCTRL_DIR`; do not point a shared
 `jobctrl.db` at a worktree-local Temporal database.
+
+Whenever `scripts/dev run`, `start`, or `restart` selects the product `web`
+component (including the default fleet), it runs `corepack pnpm extension:build`
+once before stopping or replacing any tracked process. A build failure aborts
+startup and leaves the existing processes and logs intact. Docs, demo, and
+component sets without `web` skip this build, as do status and stop commands.
+The launcher prints the absolute `dist/extension` path and Chrome load/reload
+instructions; loading or refreshing the extension in Chrome remains manual.
 
 ### Runtime Overrides
 
@@ -510,7 +519,7 @@ which executes the per-story `play()` interactions and the
 ## Browser Extension
 
 The Manifest V3 browser extension lives under `apps/extension`. It is the local
-capture/autofill client and integrated-Discovery browser transport for the
+capture/autofill client and optional integrated-Discovery browser transport for the
 TypeScript API, not a hosted/browser-store package.
 
 ```bash
@@ -526,8 +535,10 @@ installation uses Playwright's `--with-deps` option to install Xvfb. A missing
 browser or display fails the required tests.
 
 `corepack pnpm extension:build` writes the unpacked extension bundle to
-`dist/extension/`; load that directory in Chrome/Chromium developer mode for
-manual QA, or reload its existing unpacked-extension card after rebuilding.
+`dist/extension/`. The source launcher also runs this build before starting or
+restarting the product web component. Open `chrome://extensions`, enable
+**Developer mode**, and choose **Load unpacked** with that directory for manual
+QA, or click **Reload** on its existing unpacked-extension card after rebuilding.
 Reload any application tabs that were already open so Chrome injects the newly
 built content script into them.
 Chrome can otherwise load the rebuilt popup from disk while retaining the old
@@ -540,7 +551,8 @@ as access to all ordinary web sites; browser-internal and extension pages remain
 outside that match. Autofill stays passive until an explicit extension action;
 the background service worker also polls for bounded Discovery tasks and
 executes HTTP/API work in the service worker and rendered-page work in temporary
-inactive tabs in the profile where the extension is loaded. Saving the token in
+tabs in the profile where the extension is loaded. LinkedIn jobs use an active
+tab moved into an unfocused window; other pages use inactive tabs. Saving the token in
 that popup explicitly selects its extension-local installation UUID for
 Discovery; merely retaining an older token does not win a race with another
 Chrome profile. The extension uses `activeTab`, `alarms`,
@@ -558,6 +570,18 @@ selected-installation heartbeat as product-path evidence. A current popup with
 an already stored token reports whether this exact installation is selected and
 offers **Use this Chrome profile for Discovery**, so recovery does not require
 copying the token again.
+
+Discovery and Enrich also run without loading the extension. Each acquisition
+setup prefers the selected installation only when its bounded status probe
+reports connected; otherwise it uses the existing public HTTP or anonymous
+Playwright path. Site, DNS, access, and cancellation failures do not
+switch transport. Integrated fallback never enables copied-profile access.
+
+The focused `e2e/tests/optional-extension.spec.ts` browser check uses the owned
+synthetic workspace and real API/UI. Its dispatcher acknowledges launches
+without running a worker or contacting job sites. Persisted production worker
+fixtures in `test_optional_extension.py` and `test_enrichment_politeness_gate.py`
+cover acquisition in both modes separately.
 
 ## Docs Site
 
