@@ -2,6 +2,7 @@ schema_version = 1
 
 # Select recipes for the accepted outcome. These are command definitions, not
 # a requirement to run every suite. Add a focused recipe for uncovered behavior.
+# Run argv directly, substituting an owned artifact path for {report_path}.
 [checks.diff]
 kind = "static"
 description = "Committed PR changes against main have no whitespace errors or conflict markers"
@@ -16,7 +17,7 @@ timeout_seconds = 300
 [checks.scripts]
 kind = "junit"
 description = "Repository tooling preserves its tested lifecycle and safety contracts"
-argv = ["sh", "-c", "exec node --test --test-reporter=junit --test-reporter-destination=\"$1\" scripts/*.test.mjs", "devflow-scripts", "{report_path}"]
+argv = ["sh", "-c", "exec node --test --test-reporter=junit --test-reporter-destination=\"$1\" scripts/*.test.mjs", "jobctrl-scripts", "{report_path}"]
 timeout_seconds = 600
 
 [checks.api-types]
@@ -101,7 +102,7 @@ timeout_seconds = 900
 
 [checks.dry-run-diff]
 kind = "static"
-description = "Dry-run completion PR changes against the workflow dependency have no whitespace errors"
+description = "Dry-run completion PR changes against main have no whitespace errors"
 argv = ["git", "diff", "--check", "origin/main...HEAD"]
 
 [checks.domain-events]
