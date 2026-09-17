@@ -667,7 +667,12 @@ detail workspaces, profile-import steps, Settings routes, and fixed mobile
 companions. The internal capture manifest lives in
 `apps/web/e2e/tests/docs-screenshots.spec.ts`; it is not part of the public
 Product Tour. No real LLM provider, job source, Gmail account, or browser
-submission is involved.
+submission is involved. After a successful gallery capture,
+`scripts/render-docs-brand-assets.mjs` renders the docs favicon/header marks,
+app icons and social preview from the canonical `apps/web/public/favicon.svg`
+and the freshly captured synthetic dashboard. The header has explicit light
+and dark assets so it follows the reader's selected docs theme independently
+of the operating-system theme.
 
 The spec is opt-in: it only writes when `JOBCTRL_DOCS_SCREENSHOTS=1` is set,
 which `corepack pnpm docs:screenshots` does for you. A bare full e2e run
@@ -692,8 +697,13 @@ PNG for private data, broken layout, clipped content, and local-path leaks, and
 inspect Pipelines for the seeded execution, three source families, two
 reconciliation steps, available worker capacity, visual stage flow,
 stop/recovery controls, and active work. Confirm Jobs shows only the
-Active/Deleted/Hidden queue tabs and that Sources/Warnings remain hidden in its
-default view. Check Apply Review's left queue plus sequential review content,
+Active/Deleted/Hidden queue tabs and that the default view keeps source,
+compensation detail, warnings, resume template, and discovery date available
+through Columns rather than widening the initial table. Check Job Detail's
+labeled metadata, six assessment cells, visible requirement evidence, and
+readable artifact labels/actions. Check Apply Review's left queue, sequential
+review content, and Submit gates table with Gate/State/Detail columns. Inspect
+Profile/Settings for strong input outlines and section rules, then check
 Artifact Detail's preview after its audit details, and the mobile
 Profile/Evidence/record-card reflows without horizontal overflow. Keep raw IDs
 and paths inside technical disclosures. Open the rendered Product Tour and
