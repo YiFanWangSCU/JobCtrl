@@ -34,7 +34,7 @@ Contributors running from source can use the checkout-prefixed commands in
 | Spend/capacity, scoring guidance, or compensation source policy | **Settings → General** (`/settings`) |
 | Provider secret or cloud mode | **Settings → Credentials** (`/settings/credentials`) on macOS, or `~/.jobctrl/.env` / the shell |
 | Preferred provider model or employer-analysis perspectives | **Settings → Model selection** (`/settings/models`); see [Employer Analysis Perspectives](discovery.md#employer-analysis-perspectives) for how the selection is used during Discover preparation |
-| Pairing and live Discovery browser readiness | **Settings → Browser & extension** (`/settings/browser`); integrated Discovery requires the extension's live heartbeat from the user's current Chrome profile |
+| Optional extension pairing and connection status | **Settings → Browser & extension** (`/settings/browser`); Discovery and Enrich prefer the selected connected extension and can otherwise use guarded public HTTP/anonymous Playwright. See [source limits](discovery.md#crawl-politeness). |
 
 The rest of this page is a shared-settings lookup. [Data, Privacy & Safety](data-and-safety.md)
 explains what is stored or sent; [Security](security.md) explains the controls
@@ -62,7 +62,7 @@ feature off, but cannot turn it on.
 | Settings → General | [`config.json`](../api/profile-and-settings.md#config-json-field-reference) | `/v1/settings` | Live, next poll/run/workflow, or restart, as labeled; worker activity slots show desired versus active values |
 | Settings → Credentials | Non-secret desired values in `config.json`; secrets in macOS Keychain, the launch environment, or native provider stores | `/v1/credentials` | Claude and Google Keychain edits require the relevant Python process to restart; an environment-owned active route remains authoritative until its value is removed and the process restarts; Codex verification is immediate |
 | Settings → Model selection | [`config.json`](../api/profile-and-settings.md#config-json-field-reference) | `/v1/settings`; `/v1/providers/models` | Newly started work; no worker restart |
-| Settings → Browser & extension | Non-secret Apply-browser choices and adopted executable configuration in `config.json`; the pairing token and mode-`0600` selected-extension installation ID remain separate; live Discovery task status is transient | `/v1/browser-capabilities`; `/v1/extension/pairing-token`; `/v1/extension/discovery/claim`; `/v1/discovery/browser-extension/status` | Saving the token from an extension explicitly selects that Chrome installation; token rotation clears it. Integrated Discovery and Enrich become launchable only while that selected installation heartbeats from the user's current Chrome profile. Settings does not create a LinkedIn profile copy. |
+| Settings → Browser & extension | Non-secret Apply-browser choices and adopted executable configuration in `config.json`; the pairing token and mode-`0600` selected-extension installation ID remain separate; live Discovery task status is transient | `/v1/browser-capabilities`; `/v1/extension/pairing-token`; `/v1/extension/discovery/claim`; `/v1/discovery/browser-extension/status` | Saving the token from an extension explicitly selects that Chrome installation; token rotation clears it. Discovery and Enrich prefer the selected installation while it is connected; offline launches remain available through guarded public HTTP/anonymous Playwright, subject to worker readiness and source policy. Settings does not create a LinkedIn profile copy. |
 
 [Discovery](discovery.md) and [Apply](apply.md) document the storage and
 activation timing for their feature-specific controls.
@@ -185,6 +185,15 @@ documented under
 JobCtrl requires an already authenticated Codex CLI and reuses that
 authentication. Install Codex CLI and complete its supported sign-in flow
 before verifying it in JobCtrl.
+
+The explicit reuse action refreshes JobCtrl's private auth cache from valid
+local CLI credentials, including when an older cache already exists. It writes
+and validates a private temporary file before replacing the cache. Missing or
+invalid source credentials leave an existing login intact; write failures report
+failure without exposing credentials. Status checks do not import credentials,
+and ordinary generation only enrolls them when JobCtrl has no cache. Verification
+checks CLI login status; a later provider request can still report expired or
+revoked credentials.
 
 Advanced operators can set `JOBCTRL_CODEX_BIN` to override the Codex runtime.
 By default, JobCtrl uses its pinned, bundled `openai-codex-cli-bin` binary.

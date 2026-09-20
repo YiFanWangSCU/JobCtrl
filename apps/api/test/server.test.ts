@@ -1,3 +1,4 @@
+import { seedApplicationUrl } from "./seed-enrichment.js";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
@@ -7717,7 +7718,7 @@ describe("local TypeScript API", () => {
       `INSERT INTO job_enrichments (
          tenant_id, job_id, current_status, full_description, application_url,
          enriched_at, extraction_tier, attempts_json, updated_at
-       ) VALUES ('local', ?, 'pending', NULL, NULL, NULL, NULL, '[]', ?)`,
+       ) VALUES ('local', ?, 'pending', NULL, NULL, NULL, NULL, '[]', ?) ON CONFLICT (tenant_id, job_id) DO UPDATE SET application_url = NULL`,
     ).run(jobIdFor(pendingEnrichUrl), "2026-08-05T23:15:00.000Z");
     insertJob(seedDb, {
       url: pendingScoreUrl,
@@ -8059,7 +8060,11 @@ describe("local TypeScript API", () => {
          job_id, tenant_id, current_status, full_description,
          application_url, enriched_at, extraction_tier,
          attempts_json, updated_at
-       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+       ON CONFLICT (tenant_id, job_id) DO UPDATE SET current_status = excluded.current_status,
+         full_description = excluded.full_description, application_url = excluded.application_url,
+         enriched_at = excluded.enriched_at, extraction_tier = excluded.extraction_tier,
+         attempts_json = excluded.attempts_json, updated_at = excluded.updated_at`,
     ).run(
       jobIdFor("https://example.com/jobs/failed-score"),
       "local",
@@ -8142,6 +8147,10 @@ describe("local TypeScript API", () => {
   });
 
   it("retry-enrich is a no-op when no job_enrichments row exists", async () => {
+    const seedDb = new Database(options.dbPath);
+    seedDb.prepare("DELETE FROM job_enrichments WHERE tenant_id = 'local' AND job_id = ?")
+      .run(jobIdFor("https://example.com/jobs/blocked-tailor"));
+    seedDb.close();
     // Confirm ``resetEnrichmentAggregate`` doesn't crash when the
     // aggregate row was never written. Exact-v7 reset is a 0-row aggregate
     // update and never falls back to retired wide job columns.
@@ -8224,8 +8233,41 @@ describe("local TypeScript API", () => {
     await app.close();
   });
 
-  it("does not reset Enrich when the live-profile extension is offline", async () => {
-    const dispatch = vi.fn(async () => ({ status: "queued", actionId: "must-not-run" }));
+  it.each(["discover", "enrich"] as const)("dispatches %s with the optional extension offline", async (stage) => {
+    const dispatch = vi.fn(async () => ({ status: "queued", actionId: "optional-dispatch" }));
+    const jobUrl = "https://example.com/jobs/optional-enrich";
+    const db = new Database(options.dbPath);
+    insertJob(db, { url: jobUrl, title: "Optional Extension Engineer", site: "Example" });
+    insertStage(db, jobUrl, "discover", "succeeded");
+    insertStage(db, jobUrl, "enrich", "pending");
+    db.close();
+    const app = buildApp({ ...options, actionDispatcher: dispatch });
+    const bridge = await app.inject({ method: "GET", url: "/v1/discovery/browser-extension/status" });
+    expect(bridge.json()).toMatchObject({ connected: false });
+    const response = await app.inject({
+      method: "POST",
+      url: stage === "discover" ? "/v1/pipeline/actions/run-stage" : `/v1/jobs/${jobIdFor(jobUrl)}/actions/run-stage`,
+      payload: stage === "discover" ? { stages: ["discover"], dryRun: true } : { stage: "enrich" },
+    });
+    expect(response.statusCode, response.body).toBe(202);
+    expect(dispatch).toHaveBeenCalledWith(expect.objectContaining({ stage }), expect.anything());
+    await app.close();
+  });
+
+  it("still blocks offline Discovery when its worker is unavailable", async () => {
+    const dispatch = vi.fn(async () => ({ status: "queued" }));
+    const app = buildApp({ ...options, actionDispatcher: dispatch, requireHealthyWorkerForActions: true });
+    const response = await app.inject({
+      method: "POST", url: "/v1/pipeline/actions/run-stage", payload: { stages: ["discover"], dryRun: true },
+    });
+    expect(response.statusCode, response.body).toBe(503);
+    expect(response.json()).toMatchObject({ error: "worker_runtime_unavailable" });
+    expect(dispatch).not.toHaveBeenCalled();
+    await app.close();
+  });
+
+  it("resets and dispatches Enrich when the optional extension is offline", async () => {
+    const dispatch = vi.fn(async () => ({ status: "queued", actionId: "offline-enrich" }));
     const app = buildApp({ ...options, actionDispatcher: dispatch });
     const jobUrl = "https://example.com/jobs/failed-score";
     const beforeDb = new Database(options.dbPath, { readonly: true });
@@ -8240,25 +8282,24 @@ describe("local TypeScript API", () => {
       payload: { stage: "enrich", runAfter: true },
     });
 
-    expect(response.statusCode, response.body).toBe(503);
-    expect(response.json()).toMatchObject({
-      ok: false,
-      error: "discovery_extension_unavailable",
-    });
-    expect(response.json().message).toContain("never a copied profile");
-    expect(dispatch).not.toHaveBeenCalled();
+    expect(response.statusCode, response.body).toBe(202);
+    expect(response.json()).toMatchObject({ ok: true, status: "queued" });
+    expect(dispatch).toHaveBeenCalledWith(
+      expect.objectContaining({ stage: "enrich" }), expect.anything(),
+    );
     const afterDb = new Database(options.dbPath, { readonly: true });
     const after = afterDb.prepare(
       "SELECT state, error_code, version FROM job_stage_states WHERE tenant_id = 'local' AND job_id = ? AND stage = 'enrich'",
     ).get(jobIdFor(jobUrl));
     afterDb.close();
-    expect(after).toEqual(before);
+    expect(after).not.toEqual(before);
+    expect(after).toMatchObject({ state: "pending", error_code: null });
 
     await app.close();
   });
 
-  it("does not bulk-reset failed Enrich rows when the live-profile extension is offline", async () => {
-    const dispatch = vi.fn(async () => ({ status: "queued", actionId: "must-not-run" }));
+  it("resets and dispatches failed bulk Enrich while the optional extension is offline", async () => {
+    const dispatch = vi.fn(async () => ({ status: "queued", actionId: "offline-enrich" }));
     const jobUrl = "https://example.com/jobs/bulk-failed-enrich";
     const seedDb = new Database(options.dbPath);
     insertJob(seedDb, {
@@ -8318,13 +8359,13 @@ describe("local TypeScript API", () => {
       },
     });
 
-    expect(response.statusCode, response.body).toBe(503);
-    expect(response.json()).toMatchObject({
-      ok: false,
-      error: "discovery_extension_unavailable",
-    });
-    expect(readPersistedState()).toEqual(before);
-    expect(dispatch).not.toHaveBeenCalled();
+    expect(response.statusCode, response.body).toBe(202);
+    expect(response.json()).toMatchObject({ ok: true, status: "queued" });
+    expect(readPersistedState().stage).toMatchObject({ state: "pending", attempt_count: 2 });
+    expect(readPersistedState().eventCount).toBeGreaterThan(before.eventCount);
+    expect(dispatch).toHaveBeenCalledWith(
+      expect.objectContaining({ stage: "enrich", jobIds: [jobIdFor(jobUrl)] }), expect.anything(),
+    );
 
     await app.close();
   });
@@ -8344,8 +8385,8 @@ describe("local TypeScript API", () => {
     await app.close();
   });
 
-  it("does not dispatch pending bulk Enrich while the live-profile extension is offline", async () => {
-    const dispatch = vi.fn(async () => ({ status: "queued", actionId: "must-not-run" }));
+  it("dispatches pending bulk Enrich while the optional extension is offline", async () => {
+    const dispatch = vi.fn(async () => ({ status: "queued", actionId: "offline-enrich" }));
     const jobUrl = "https://example.com/jobs/bulk-pending-enrich";
     const seedDb = new Database(options.dbPath);
     insertJob(seedDb, {
@@ -8367,12 +8408,11 @@ describe("local TypeScript API", () => {
       },
     });
 
-    expect(response.statusCode, response.body).toBe(503);
-    expect(response.json()).toMatchObject({
-      ok: false,
-      error: "discovery_extension_unavailable",
-    });
-    expect(dispatch).not.toHaveBeenCalled();
+    expect(response.statusCode, response.body).toBe(202);
+    expect(response.json()).toMatchObject({ ok: true, status: "queued" });
+    expect(dispatch).toHaveBeenCalledWith(
+      expect.objectContaining({ stage: "enrich" }), expect.anything(),
+    );
     const afterDb = new Database(options.dbPath, { readonly: true });
     const after = afterDb.prepare(
       `SELECT state, attempt_count, error_code, metadata_json
@@ -12234,8 +12274,8 @@ function seedExactV7CompensationDatabase(
   if (job) {
     db.prepare(
       `INSERT INTO jobs (
-        tenant_id, job_id, url, title, site, strategy, location, discovered_at, application_url
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        tenant_id, job_id, url, title, site, strategy, location, discovered_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
     ).run(
       "local",
       job.jobId,
@@ -12245,8 +12285,8 @@ function seedExactV7CompensationDatabase(
       "test",
       "Remote",
       "2026-04-29T10:00:00+00:00",
-      `${job.postingUrl}/apply`,
     );
+    seedApplicationUrl(db, "local", job.jobId, `${job.postingUrl}/apply`);
   }
   db.close();
 }
@@ -12680,10 +12720,10 @@ function insertJob(
 ): void {
   db.prepare(
     `INSERT INTO jobs (
-      tenant_id, job_id, url, title, site, company, strategy, location, salary, discovered_at, application_url,
+      tenant_id, job_id, url, title, site, company, strategy, location, salary, discovered_at,
       description, full_description, detail_scraped_at, fit_score, score_reasoning,
       scored_at, tailored_resume_path, tailored_at
-    ) VALUES ('local', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ) VALUES ('local', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   ).run(
     jobIdFor(job.url),
     job.url,
@@ -12694,7 +12734,6 @@ function insertJob(
     "Remote",
     "",
     "2026-04-29T10:00:00+00:00",
-    job.url,
     job.description ?? "Short description",
     job.fullDescription ?? "Long description",
     "2026-04-29T10:01:00+00:00",
@@ -12704,6 +12743,7 @@ function insertJob(
     job.tailoredPath ?? null,
     job.tailoredPath ? "2026-04-29T10:03:00+00:00" : null,
   );
+  seedApplicationUrl(db, "local", jobIdFor(job.url), job.url);
 }
 
 function jobIdFor(jobUrl: string): string {
@@ -12720,7 +12760,8 @@ function insertEnrichment(
     `INSERT INTO job_enrichments (
        tenant_id, job_id, current_status, full_description, application_url,
        enriched_at, extraction_tier, attempts_json, updated_at
-     ) VALUES ('local', ?, 'enriched', ?, ?, ?, 'css_selectors', '[]', ?)`,
+     ) VALUES ('local', ?, 'enriched', ?, ?, ?, 'css_selectors', '[]', ?)
+     ON CONFLICT (tenant_id, job_id) DO UPDATE SET current_status = excluded.current_status, full_description = excluded.full_description, application_url = excluded.application_url, enriched_at = excluded.enriched_at, extraction_tier = excluded.extraction_tier, updated_at = excluded.updated_at`,
   ).run(
     jobIdFor(jobUrl),
     fullDescription,

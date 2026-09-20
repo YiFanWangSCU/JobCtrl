@@ -182,6 +182,16 @@ row of the same generation.
 
 ## Jobs read model and lifecycle
 
+`:key` on every job-scoped route is the tenant-scoped stable `JobId`. A posting
+URL, retained posting locator, or application URL is accepted only as an
+external locator, and posting identity resolves first. An application URL
+resolves only when exactly one job in the tenant owns it as its canonical
+`job_enrichments.application_url` value or retained `job_application_locators`
+alias; a shared application endpoint resolves to no job and the route returns
+`404 { ok: false, error: "job_not_found" }`. The
+[application URL authority inventory](../architecture/application-url-authority.md)
+lists the readers of these values.
+
 `/v1/jobs` and `/v1/jobs/:key` expose the latest persisted scoring evidence
 from `job_scores` as additive read-model fields: `scoreBreakdown`,
 `scoreKeywords`, `scoreVersion`, `scoredAt`, `scoreTrace`, and
@@ -286,7 +296,7 @@ returns one of:
   deterministic page extraction, canonical Discovery ingestion, and snapshot
   capture; or
 - `{ ok: true, status: "manual_capture_required", itemId, reason }` when a
-  login, bot control, rate limit, robots decision, paywall, or ambiguous page
+  login, bot control, rate limit, paywall, or ambiguous page
   requires user-provided content.
 
 The fallback appends or reopens a pending Manual Capture item and writes no
@@ -1285,10 +1295,11 @@ Current-version preparation maintenance actions are separate endpoints:
   `run_stage` workflows with the selected job URLs and requested worker count.
   The route records pipeline workflow metadata plus per-job `StageQueued`
   events with `source: "bulk_retry_failed"` so later debugging can tell which
-  action picked up the reset rows. When that preview cohort contains Enrich,
-  the selected extension must have a current heartbeat; otherwise the route
-  returns `503 discovery_extension_unavailable` before resetting any stage,
-  attempt/error metadata, diagnostics, or events and without dispatching.
+  action picked up the reset rows. Enrich cohorts can reset and dispatch while
+  the extension is offline. Worker readiness still precedes reset; an unavailable
+  worker returns `503 worker_runtime_unavailable` without those mutations.
+  Acquisition later prefers a connected extension or selects guarded anonymous
+  access before fetching.
   `apply` failures are reset but not auto-run from the bulk retry route.
 - The active Jobs bulk toolbar exposes `retry all failed` outside the failed
   state filter. It posts the current Jobs filters with `state: failed` and
@@ -1298,9 +1309,9 @@ Current-version preparation maintenance actions are separate endpoints:
 - The active Jobs bulk toolbar also exposes `continue pending prep`, posting
   the current Jobs filters with `state: pending` and `deleted: active` to the
   bulk pending-preparation endpoint. The endpoint still filters out application
-  work, so this control never auto-submits applications. If the selected pending
-  cohort starts at Enrich, an offline extension returns the same `503` before
-  dispatch and leaves the pending stage untouched.
+  work, so this control never auto-submits applications. Pending Enrich cohorts
+  can dispatch with an offline extension; worker readiness and stage eligibility
+  remain required. Accepted work returns the normal queued/accepted response.
 
 First-time manual tailoring is not a re-tailor action. The job detail stage
 timeline exposes `POST /v1/jobs/:jobKey/actions/tailor` on the internal
@@ -1583,14 +1594,19 @@ run link to its exact activity stream.
   allow/default-block DNR rules to rendered-page navigation. Timeout/cancel
   hard-aborts work, closes an inactive tab when one exists, and streams results
   under UTF-8 byte limits.
-- A Discover request to `POST /v1/pipeline/actions/run-stage`, or a job-scoped
-  or bulk Enrich run/retry, returns `503` with
-  `error: "discovery_extension_unavailable"` before dispatch unless the broker
-  has a current extension heartbeat. Integrated Discovery uses the Chrome
-  profile where that extension is installed and never falls back to an adopted
-  executable or copied profile. Enrich retry rejection happens before the API
-  resets the stage, including bulk retry previews; pending bulk continuation
-  also stops before dispatch.
+- Discover requests to `POST /v1/pipeline/actions/run-stage` and job-scoped or
+  bulk Enrich runs/retries do not require an extension heartbeat. Worker-ready,
+  eligible requests can reset and dispatch offline and return the normal `202`
+  queued/accepted response; worker readiness, stage and authorization gates
+  still apply. Each acquisition setup uses a bounded status probe and prefers
+  the selected installation only for literal `connected: true`; unavailable or
+  malformed status selects guarded public HTTP or anonymous Playwright. A fetch
+  failure or cancellation never selects a second transport. Neither mode uses
+  an adopted executable or copied profile. Broker task authentication, execution
+  authorization, installation binding and connected-mode bounds remain required.
+  Anonymous broad-board Requests sessions validate every destination/redirect
+  and pin direct sockets to public addresses; proxy routing is rejected because
+  the worker cannot pin proxy-side destination DNS.
 - `GET /v1/browser-capabilities` returns `core-browser`,
   `auto-apply-browser`, and `authenticated-linkedin-browser` state without
   returning a saved executable or source-profile path. It also returns
@@ -1762,6 +1778,21 @@ Each frame:
   `PipelineStepStarted`, `ApplyRunStarted`). The parser also requires `data` to
   decode to a JSON object before dispatch.
 - `data: <payload_json>` — the payload, ready for `JSON.parse`.
+
+### Dry-run completion
+
+`event: DryRunCompleted` carries the existing launcher payload inside the SSE
+`{ tenantId, occurredAt, payload }` envelope. Canonical `payload.jobId` identifies
+the job. Lifecycle keys are preserved as emitted: `run_id`,
+`result: "dry_run_complete"`, `finished_at`, nullable `duration_ms`,
+`dry_run: true`, nullable numeric `worker_id` and nullable string `model`. Evidence fields are
+`coverage` (`full` or `partial`), `blocked_channels` (strings),
+`allowed_navigations` (evidence objects), nullable `materials_generation`,
+`application_url`, and `profile_version`.
+
+The shared event factory and browser use these names without camelCase
+normalization. The event invalidates affected projection reads and remains
+separate from `ApplicationSubmitted`: it never establishes submission.
 
 ### Tenant filtering (COALESCE on the row, not the request)
 

@@ -42,8 +42,7 @@ JOBCTRL_DIR=/tmp/jobctrl-qa corepack pnpm dev
 - Use Conventional Commits for commit messages and PR titles.
 - External contributors should sign off every commit with the Developer
   Certificate of Origin trailer.
-- For standalone changes, update docs with public behavior. For an approved
-  unreleased stack, update canonical docs in the final PR and run QA afterward.
+- Update documentation for changed public behavior.
 - Do not commit local user data, `.env` files, resumes, PDFs, logs, browser
   profiles, SQLite databases, or generated application materials.
 - CI eligibility follows each executable workflow's events and path filters,
@@ -74,9 +73,6 @@ git rebase --signoff origin/main
 
 ## Validation
 
-Configured maintainer agent work uses the pinned workflow described in
-[AGENTS.md](AGENTS.md) and [workflow setup](docs/developer/workflow.md).
-The maintainer package is not required to build, test or contribute.
 Frontend changes also follow [apps/web/AGENTS.md](apps/web/AGENTS.md).
 
 Run the touched-surface commands in

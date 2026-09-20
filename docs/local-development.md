@@ -80,8 +80,9 @@ corepack pnpm dev
 ```
 
 `corepack pnpm dev` is the source-development counterpart of installed
-`jobctrl start`. It starts the full local fleet in dependency order: Temporal dev server,
-TypeScript API, Vite web app, and the Python worker. Before each
+`jobctrl start`. It first builds the browser extension, then starts the full
+local fleet in dependency order: Temporal dev server, TypeScript API, Vite web
+app, and the Python worker. Before each
 component starts, the launcher stops the existing tracked JobCtrl process
 tree for that component, so rerunning `corepack pnpm dev` starts from a clean owned
 stack. It runs in the foreground so supervised terminals keep the child
@@ -102,6 +103,14 @@ both under `JOBCTRL_DIR` lets an interrupted workflow reconnect to the same
 history when the source stack is restarted from another Git worktree. To run a
 fully isolated stack, give it a separate `JOBCTRL_DIR`; do not point a shared
 `jobctrl.db` at a worktree-local Temporal database.
+
+Whenever `scripts/dev run`, `start`, or `restart` selects the product `web`
+component (including the default fleet), it runs `corepack pnpm extension:build`
+once before stopping or replacing any tracked process. A build failure aborts
+startup and leaves the existing processes and logs intact. Docs, demo, and
+component sets without `web` skip this build, as do status and stop commands.
+The launcher prints the absolute `dist/extension` path and Chrome load/reload
+instructions; loading or refreshing the extension in Chrome remains manual.
 
 ### Runtime Overrides
 
@@ -294,8 +303,7 @@ consent read, and exact denied/granted cookie boundary.
 Choose the touched-surface recipe and required gates through
 [Reliability & QA](local-reliability-qa.md). The root aggregates do not include
 the separate web unit, type-level, Playwright or Storybook suites. Build the
-Python package when packaging behavior changes. Maintainer workflow setup is
-[documented separately](developer/workflow.md).
+Python package when packaging behavior changes.
 
 ## Pull-request CI
 
@@ -306,7 +314,8 @@ labels and Project status do not approve code execution.
 CI is plain path-filtered GitHub Actions with no routing layer: each workflow
 under `.github/workflows/` declares the paths it owns and runs whole when a
 pull request or a `main` push touches them. `typescript.yml` runs the API, web,
-Storybook, web E2E, and extension suites; `python.yml` lints and
+Storybook, web E2E, and extension suites, including `web:lint` frontend boundary
+checks; `python.yml` lints and
 runs the full pytest suite on each supported Python version; `launcher.yml`
 runs the native launcher race suite together with the cross-runtime migration
 boundary (Go opens the candidate with the locked Python migration runtime,
@@ -456,12 +465,19 @@ Run the dev server:
 corepack pnpm web:dev
 ```
 
-Typecheck and build:
+Check frontend boundaries, typecheck, and build:
 
 ```bash
+corepack pnpm web:lint
 corepack pnpm web:check
 corepack pnpm web:build
 ```
+
+`web:lint` checks production imports and browser-capability access using the
+TypeScript syntax tree. Existing boundary debt has scoped exceptions; new
+imports cannot silently widen them. See the
+[frontend boundary checks](architecture/frontend/state-and-ports.md#automated-boundary-checks)
+for the enforced rules, legitimate infrastructure access, and review limits.
 
 Run the test pyramid (Vitest unit / hook / component, type-level tests, and
 Playwright end-to-end) through the root aliases:
@@ -502,7 +518,7 @@ which executes the per-story `play()` interactions and the
 ## Browser Extension
 
 The Manifest V3 browser extension lives under `apps/extension`. It is the local
-capture/autofill client and integrated-Discovery browser transport for the
+capture/autofill client and optional integrated-Discovery browser transport for the
 TypeScript API, not a hosted/browser-store package.
 
 ```bash
@@ -518,8 +534,10 @@ installation uses Playwright's `--with-deps` option to install Xvfb. A missing
 browser or display fails the required tests.
 
 `corepack pnpm extension:build` writes the unpacked extension bundle to
-`dist/extension/`; load that directory in Chrome/Chromium developer mode for
-manual QA, or reload its existing unpacked-extension card after rebuilding.
+`dist/extension/`. The source launcher also runs this build before starting or
+restarting the product web component. Open `chrome://extensions`, enable
+**Developer mode**, and choose **Load unpacked** with that directory for manual
+QA, or click **Reload** on its existing unpacked-extension card after rebuilding.
 Reload any application tabs that were already open so Chrome injects the newly
 built content script into them.
 Chrome can otherwise load the rebuilt popup from disk while retaining the old
@@ -532,7 +550,8 @@ as access to all ordinary web sites; browser-internal and extension pages remain
 outside that match. Autofill stays passive until an explicit extension action;
 the background service worker also polls for bounded Discovery tasks and
 executes HTTP/API work in the service worker and rendered-page work in temporary
-inactive tabs in the profile where the extension is loaded. Saving the token in
+tabs in the profile where the extension is loaded. LinkedIn jobs use an active
+tab moved into an unfocused window; other pages use inactive tabs. Saving the token in
 that popup explicitly selects its extension-local installation UUID for
 Discovery; merely retaining an older token does not win a race with another
 Chrome profile. The extension uses `activeTab`, `alarms`,
@@ -551,13 +570,25 @@ an already stored token reports whether this exact installation is selected and
 offers **Use this Chrome profile for Discovery**, so recovery does not require
 copying the token again.
 
+Discovery and Enrich also run without loading the extension. Each acquisition
+setup prefers the selected installation only when its bounded status probe
+reports connected; otherwise it uses the existing public HTTP or anonymous
+Playwright path. Site, DNS, access, and cancellation failures do not
+switch transport. Integrated fallback never enables copied-profile access.
+
+The focused `e2e/tests/optional-extension.spec.ts` browser check uses the owned
+synthetic workspace and real API/UI. Its dispatcher acknowledges launches
+without running a worker or contacting job sites. Persisted production worker
+fixtures in `test_optional_extension.py` and `test_enrichment_politeness_gate.py`
+cover acquisition in both modes separately.
+
 ## Docs Site
 
 The documentation under `docs/` (minus internal planning docs) is also a
 static VitePress site, configured in `docs/.vitepress/config.ts`. The site
 publishes the user guide, developer guide, architecture docs, and reference
 docs behind a hero landing page (`docs/index.md`); `docs/plans/`,
-`docs/incidents/`, `docs/backlog.md`, and the repo-facing `docs/README.md`
+`docs/incidents/`, and the repo-facing `docs/README.md`
 map stay repository-only, and links that point at unpublished or repo-root
 files are rewritten to GitHub URLs at build time.
 
@@ -636,7 +667,12 @@ detail workspaces, profile-import steps, Settings routes, and fixed mobile
 companions. The internal capture manifest lives in
 `apps/web/e2e/tests/docs-screenshots.spec.ts`; it is not part of the public
 Product Tour. No real LLM provider, job source, Gmail account, or browser
-submission is involved.
+submission is involved. After a successful gallery capture,
+`scripts/render-docs-brand-assets.mjs` renders the docs favicon/header marks,
+app icons and social preview from the canonical `apps/web/public/favicon.svg`
+and the freshly captured synthetic dashboard. The header has explicit light
+and dark assets so it follows the reader's selected docs theme independently
+of the operating-system theme.
 
 The spec is opt-in: it only writes when `JOBCTRL_DOCS_SCREENSHOTS=1` is set,
 which `corepack pnpm docs:screenshots` does for you. A bare full e2e run
@@ -661,8 +697,13 @@ PNG for private data, broken layout, clipped content, and local-path leaks, and
 inspect Pipelines for the seeded execution, three source families, two
 reconciliation steps, available worker capacity, visual stage flow,
 stop/recovery controls, and active work. Confirm Jobs shows only the
-Active/Deleted/Hidden queue tabs and that Sources/Warnings remain hidden in its
-default view. Check Apply Review's left queue plus sequential review content,
+Active/Deleted/Hidden queue tabs and that the default view keeps source,
+compensation detail, warnings, resume template, and discovery date available
+through Columns rather than widening the initial table. Check Job Detail's
+labeled metadata, six assessment cells, visible requirement evidence, and
+readable artifact labels/actions. Check Apply Review's left queue, sequential
+review content, and Submit gates table with Gate/State/Detail columns. Inspect
+Profile/Settings for strong input outlines and section rules, then check
 Artifact Detail's preview after its audit details, and the mobile
 Profile/Evidence/record-card reflows without horizontal overflow. Keep raw IDs
 and paths inside technical disclosures. Open the rendered Product Tour and

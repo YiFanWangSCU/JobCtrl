@@ -2,30 +2,10 @@
 
 ## Workflow
 
-The installed `using-devflow` entry skill supplies instructions at the start of a
-conversation. Questions and opening a chat do not start work. A direct work
-request, concrete bug report, named issue, or bounded backlog batch authorizes
-the agent to capture or reuse its issues and begin without another approval step.
-
-For configured maintainer work, use the installed `devflow` skill and the immutable
-pin in `.devflow/workflow.lock`. Use `scripts/devflow` wherever the skill says
-`devflow`. Once work is requested, run `scripts/devflow doctor --json`; continue
-recorded work with its existing ID. Historical attempts without a recorded user
-request need re-admission under the current request. Read only the selected
-role reference. Devflow owns intake, execution state, independent findings/gates,
-recovery and delivery; do not load a second lifecycle from legacy review/fix
-skills. Missing installation or host capability is a diagnostic, never a passing
-gate. Setup and cutover limits: `docs/developer/workflow.md`.
-
-Public contributors and clients without the workflow host use `CONTRIBUTING.md`
-and the same product/check requirements. `CLAUDE.md` remains linked here; the
-native host-specific task bridge does not become a requirement to use JobCtrl.
-
 Use a dedicated task branch/worktree, preserve unrelated dirty work, and use
 Conventional Commits. Merge, release, deployment and external communication
-still require the user's scoped authorization. Preserve the user's model
-settings and explicit role overrides. For checks and required independent gates,
-use `docs/local-reliability-qa.md`.
+still require the user's scoped authorization. For project verification
+requirements, use `docs/local-reliability-qa.md`.
 
 ## Reference Routing
 
@@ -40,9 +20,7 @@ Start with `docs/README.md`, then read only the owning reference:
 - Dependencies/scripts: `package.json`, `workers/automation/pyproject.toml`.
 - Web changes: also read `apps/web/AGENTS.md`.
 
-Standalone capabilities update every owning document. Approved unreleased stacks
-may defer canonical docs and cumulative product QA to the final PR; active
-high-risk paths retain their immediate documentation and verification gates.
+Standalone capabilities update every owning document.
 
 ## Local Runtime And Data
 

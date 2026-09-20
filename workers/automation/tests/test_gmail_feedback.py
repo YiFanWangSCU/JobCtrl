@@ -28,14 +28,13 @@ from jobctrl.infrastructure.gmail.feedback import (
     ensure_application_feedback_tables,
     scan_gmail_feedback,
 )
-from jobctrl.infrastructure.migrations.schema_v9 import (
-    create_unstamped_exact_v9_candidate,
-)
 from jobctrl.infrastructure.projections.projection_builder import (
     PROJECTION_NAME,
     ProjectionBuilder,
 )
 
+
+from jobctrl.infrastructure.migrations.schema_v10 import create_exact_v10_schema
 
 RECIPIENT = "candidate@example.com"
 JOB_URL = "https://jobs.example.com/platform-engineer"
@@ -442,9 +441,9 @@ def test_job_deleted_during_body_read_is_not_persisted(
         conn.execute(
             """
             INSERT INTO jobs (
-                tenant_id, job_id, url, title, company, application_url,
+                tenant_id, job_id, url, title, company,
                 applied_at, apply_status
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 "other",
@@ -452,7 +451,6 @@ def test_job_deleted_during_body_read_is_not_persisted(
                 "https://jobs.example.com/other-tenant-platform-engineer",
                 "Platform Engineer",
                 "ExampleCo",
-                "https://boards.greenhouse.io/exampleco/jobs/other-tenant-123",
                 APPLIED_AT,
                 "applied",
             ),
@@ -658,16 +656,16 @@ def test_raw_body_is_not_written_to_events_or_summary(tmp_path: Path) -> None:
         conn.close()
 
 
-def test_outcome_anchors_join_v9_job_id(tmp_path: Path) -> None:
+def test_outcome_anchors_join_v10_job_id(tmp_path: Path) -> None:
     """Outcome anchors use the tenant-scoped canonical job identity."""
     db_path = tmp_path / "jobctrl.db"
     conn = sqlite3.connect(db_path)
     conn.row_factory = sqlite3.Row
-    create_unstamped_exact_v9_candidate(conn)
+    create_exact_v10_schema(conn)
     conn.execute(
         """
-        INSERT INTO jobs (tenant_id, job_id, url, title, company, application_url)
-        VALUES (?, ?, ?, ?, ?, ?)
+        INSERT INTO jobs (tenant_id, job_id, url, title, company)
+        VALUES (?, ?, ?, ?, ?)
         """,
         (
             "local",
@@ -675,13 +673,12 @@ def test_outcome_anchors_join_v9_job_id(tmp_path: Path) -> None:
             JOB_URL,
             "Principal Platform Engineer",
             "ExampleCo",
-            "https://boards.greenhouse.io/exampleco/jobs/123",
         ),
     )
     conn.execute(
         """
-        INSERT INTO jobs (tenant_id, job_id, url, title, company, application_url)
-        VALUES (?, ?, ?, ?, ?, ?)
+        INSERT INTO jobs (tenant_id, job_id, url, title, company)
+        VALUES (?, ?, ?, ?, ?)
         """,
         (
             "other",
@@ -689,7 +686,6 @@ def test_outcome_anchors_join_v9_job_id(tmp_path: Path) -> None:
             "https://jobs.example.com/other-tenant-role",
             "Other Tenant Role",
             "OtherTenantCo",
-            "https://boards.example.com/other/456",
         ),
     )
     conn.execute(
@@ -724,6 +720,11 @@ def test_outcome_anchors_join_v9_job_id(tmp_path: Path) -> None:
             "2026-06-02T12:01:00+00:00",
         ),
     )
+    conn.execute(
+        "INSERT INTO job_enrichments(tenant_id, job_id, current_status, application_url, updated_at) "
+        "VALUES('local', ?, 'pending', 'https://boards.greenhouse.io/exampleco/jobs/123', ?)",
+        (JOB_ID, APPLIED_AT),
+    )
     conn.commit()
     try:
         anchors = _outcome_anchors(conn)
@@ -736,16 +737,16 @@ def test_outcome_anchors_join_v9_job_id(tmp_path: Path) -> None:
     assert anchors[0].company == "ExampleCo"
 
 
-def test_apply_run_anchors_join_v9_tenant_and_job_id(tmp_path: Path) -> None:
+def test_apply_run_anchors_join_v10_tenant_and_job_id(tmp_path: Path) -> None:
     """Apply-run anchors cannot cross tenants that share a JobId."""
     db_path = tmp_path / "jobctrl.db"
     conn = sqlite3.connect(db_path)
     conn.row_factory = sqlite3.Row
-    create_unstamped_exact_v9_candidate(conn)
+    create_exact_v10_schema(conn)
     conn.executemany(
         """
-        INSERT INTO jobs (tenant_id, job_id, url, title, company, application_url)
-        VALUES (?, ?, ?, ?, ?, ?)
+        INSERT INTO jobs (tenant_id, job_id, url, title, company)
+        VALUES (?, ?, ?, ?, ?)
         """,
         [
             (
@@ -754,7 +755,6 @@ def test_apply_run_anchors_join_v9_tenant_and_job_id(tmp_path: Path) -> None:
                 JOB_URL,
                 "Principal Platform Engineer",
                 "ExampleCo",
-                "https://boards.greenhouse.io/exampleco/jobs/123",
             ),
             (
                 "other",
@@ -762,7 +762,6 @@ def test_apply_run_anchors_join_v9_tenant_and_job_id(tmp_path: Path) -> None:
                 "https://jobs.example.com/other-tenant-role",
                 "Other Tenant Role",
                 "OtherTenantCo",
-                "https://boards.example.com/other/456",
             ),
         ],
     )
@@ -795,6 +794,11 @@ def test_apply_run_anchors_join_v9_tenant_and_job_id(tmp_path: Path) -> None:
             ),
         ],
     )
+    conn.execute(
+        "INSERT INTO job_enrichments(tenant_id, job_id, current_status, application_url, updated_at) "
+        "VALUES('local', ?, 'pending', 'https://boards.greenhouse.io/exampleco/jobs/123', ?)",
+        (JOB_ID, APPLIED_AT),
+    )
     conn.commit()
     try:
         anchors = _apply_run_anchors(conn)
@@ -807,17 +811,17 @@ def test_apply_run_anchors_join_v9_tenant_and_job_id(tmp_path: Path) -> None:
     assert anchors[0].company == "ExampleCo"
 
 
-def test_v9_scan_writes_canonical_job_id_and_sse_event(tmp_path: Path) -> None:
+def test_v10_scan_writes_canonical_job_id_and_sse_event(tmp_path: Path) -> None:
     """The production scanner persists canonical records and an SSE-ready event."""
     db_path = tmp_path / "jobctrl.db"
     conn = sqlite3.connect(db_path)
-    create_unstamped_exact_v9_candidate(conn)
+    create_exact_v10_schema(conn)
     conn.execute(
         """
         INSERT INTO jobs (
-            tenant_id, job_id, url, title, company, application_url,
+            tenant_id, job_id, url, title, company,
             applied_at, apply_status
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?)
         """,
         (
             "local",
@@ -825,10 +829,14 @@ def test_v9_scan_writes_canonical_job_id_and_sse_event(tmp_path: Path) -> None:
             JOB_URL,
             "Principal Platform Engineer",
             "ExampleCo",
-            "https://boards.greenhouse.io/exampleco/jobs/123",
             APPLIED_AT,
             "applied",
         ),
+    )
+    conn.execute(
+        "INSERT INTO job_enrichments(tenant_id, job_id, current_status, application_url, updated_at) "
+        "VALUES('local', ?, 'pending', 'https://boards.greenhouse.io/exampleco/jobs/123', ?)",
+        (JOB_ID, APPLIED_AT),
     )
     conn.commit()
     conn.close()
@@ -837,8 +845,8 @@ def test_v9_scan_writes_canonical_job_id_and_sse_event(tmp_path: Path) -> None:
     client = FakeGmailClient(
         [
             {
-                "id": "v9-linked",
-                "threadId": "thread-v9",
+                "id": "v10-linked",
+                "threadId": "thread-v10",
                 "subject": "ExampleCo application received for Platform Engineer",
                 "from": "recruiting@exampleco.com",
                 "to": RECIPIENT,
@@ -848,9 +856,9 @@ def test_v9_scan_writes_canonical_job_id_and_sse_event(tmp_path: Path) -> None:
             }
         ],
         {
-            "v9-linked": {
-                "id": "v9-linked",
-                "threadId": "thread-v9",
+            "v10-linked": {
+                "id": "v10-linked",
+                "threadId": "thread-v10",
                 "subject": "ExampleCo application received for Platform Engineer",
                 "from": "recruiting@exampleco.com",
                 "to": RECIPIENT,
@@ -977,12 +985,13 @@ def test_feedback_events_publish_after_commit_for_projection_refresh(
             window_days=7,
         )
 
+        projection_conn = get_connection(db_path)
         max_event_id = projection_conn.execute(
             "SELECT MAX(event_id) FROM job_events"
         ).fetchone()[0]
         watermark = projection_conn.execute(
             "SELECT last_event_id FROM event_watermarks WHERE projection_name = ?",
-            (PROJECTION_NAME,),
+            (f"python:{PROJECTION_NAME}:local",),
         ).fetchone()
         projected_job = projection_conn.execute(
             "SELECT job_id FROM job_list_projections WHERE tenant_id = ? AND job_id = ?",
@@ -1010,34 +1019,20 @@ def seed_feedback_db(tmp_path: Path) -> Path:
     db_path = tmp_path / "jobctrl.db"
     conn = sqlite3.connect(db_path)
     conn.execute("PRAGMA journal_mode=WAL")
-    create_unstamped_exact_v9_candidate(conn)
+    create_exact_v10_schema(conn)
     conn.execute(
-        """
-        INSERT INTO jobs (
-            tenant_id, job_id, url, title, company, site, application_url, applied_at,
-            apply_status, discovered_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """,
-        (
-            "local",
-            JOB_ID,
-            JOB_URL,
-            "Principal Platform Engineer",
-            "ExampleCo",
-            "ExampleCo",
-            "https://boards.greenhouse.io/exampleco/jobs/123",
-            APPLIED_AT,
-            "applied",
-            "2026-05-31T10:00:00+00:00",
-        ),
+        "INSERT INTO jobs(tenant_id,job_id,url,title,company,site,applied_at,apply_status,discovered_at) "
+        "VALUES('local',?,?, 'Principal Platform Engineer','ExampleCo','ExampleCo',?,'applied','2026-05-31T10:00:00+00:00')",
+        (JOB_ID, JOB_URL, APPLIED_AT),
     )
     conn.execute(
-        """
-        INSERT INTO candidate_profiles (
-            tenant_id, profile_id, personal_email, updated_at
-        ) VALUES (?, ?, ?, ?)
-        """,
-        ("local", "default", RECIPIENT, "2026-06-01T09:00:00+00:00"),
+        "INSERT INTO job_enrichments(tenant_id,job_id,current_status,application_url,updated_at) "
+        "VALUES('local',?,'pending','https://boards.greenhouse.io/exampleco/jobs/123',?)",
+        (JOB_ID, APPLIED_AT),
+    )
+    conn.execute(
+        "INSERT INTO candidate_profiles(tenant_id,profile_id,personal_email,updated_at) VALUES('local','default',?,?)",
+        (RECIPIENT, APPLIED_AT),
     )
     ensure_application_feedback_tables(conn)
     conn.commit()
@@ -1083,3 +1078,49 @@ def seed_existing_evidence(db_path: Path, *, provider_message_id: str) -> None:
 
 def epoch_ms(value: str) -> int:
     return int(datetime.fromisoformat(value).timestamp() * 1000)
+
+
+def test_exact_scan_preserves_other_tenant_and_schema_and_writes_canonical_references(tmp_path: Path) -> None:
+    from jobctrl.infrastructure.migrations.schema_manifest import EXACT_V10_MANIFEST, assert_exact_manifest, schema_dump
+
+    db_path = seed_feedback_db(tmp_path)
+    with sqlite3.connect(db_path) as conn:
+        conn.execute("INSERT INTO jobs(tenant_id,job_id,url,title,company,applied_at) VALUES('other', ?, ?, 'Other title', 'Other tenant', ?)", (JOB_ID, JOB_URL, APPLIED_AT))
+        conn.execute("INSERT INTO job_enrichments(tenant_id,job_id,current_status,application_url,updated_at) VALUES('other',?,'pending','https://other.example/apply',?)", (JOB_ID, APPLIED_AT))
+        conn.execute("INSERT INTO application_outcomes(tenant_id,outcome_id,job_id,kind,source,occurred_at,recorded_at) VALUES('other','other-outcome',?,'offer','user',?,?)", (JOB_ID, APPLIED_AT, APPLIED_AT))
+        other_before = conn.execute("SELECT * FROM jobs WHERE tenant_id='other'").fetchall()
+        schema_before = schema_dump(conn)
+    metadata = {'id':'tenant-message','subject':'ExampleCo Platform application received','from':'recruiting@exampleco.com','to':RECIPIENT,'internalDate':str(epoch_ms('2026-06-01T11:00:00+00:00'))}
+    client = FakeGmailClient([metadata], {'tenant-message': dict(metadata, body_text='Thank you for applying.')})
+    summary = scan_gmail_feedback(db_path=db_path, client=client, recipient_email=RECIPIENT)
+    assert summary['scannedAnchorCount'] == 1 and summary['linkedEvidenceCount'] == 1
+    assert summary['evidence'][0]['jobId'] == JOB_ID
+    with sqlite3.connect(db_path) as conn:
+        assert_exact_manifest(conn, EXACT_V10_MANIFEST)
+        assert schema_dump(conn) == schema_before
+        assert conn.execute("SELECT * FROM jobs WHERE tenant_id='other'").fetchall() == other_before
+        for table in ('application_email_evidence', 'application_outcome_suggestions'):
+            assert conn.execute(f'SELECT tenant_id,job_id FROM {table}').fetchall() == [('local',JOB_ID)]
+        event = conn.execute('SELECT tenant_id,job_id,identity_version,payload_json FROM job_events').fetchone()
+        assert event[:3] == ('local',JOB_ID,1)
+        assert json.loads(event[3])['jobId'] == JOB_ID
+        assert conn.execute('PRAGMA foreign_key_check').fetchall() == []
+        assert conn.execute('SELECT tenant_id,outcome_id FROM application_outcomes').fetchall() == [('other','other-outcome')]
+
+
+def test_feedback_rejects_old_schema_before_any_table_mutation(tmp_path: Path) -> None:
+    from jobctrl.database import SchemaMigrationRequiredError, close_connection
+    from jobctrl.infrastructure.migrations.schema_v9 import create_unstamped_exact_v9_candidate
+
+    db_path = tmp_path / 'old.db'
+    with sqlite3.connect(db_path) as conn:
+        create_unstamped_exact_v9_candidate(conn)
+    before = db_path.read_bytes()
+    client = FakeGmailClient([])
+    try:
+        with pytest.raises(SchemaMigrationRequiredError):
+            scan_gmail_feedback(db_path=db_path, client=client, recipient_email=RECIPIENT)
+        assert db_path.read_bytes() == before
+        assert not client.search_calls and not client.read_calls
+    finally:
+        close_connection(db_path)
